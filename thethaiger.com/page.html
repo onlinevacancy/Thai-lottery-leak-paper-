@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Telegram Upload</title>
+</head>
+<body>
+    <h1>Test Upload</h1>
+    <input type="file" id="fileInput">
+    <button onclick="uploadFile()">Upload</button>
+    <div id="result"></div>
+
+    <script>
+    // 🔴 Replace with your worker URL
+    const WORKER_URL = 'https://telegram-upload.your-subdomain.workers.dev/upload';
+
+    async function uploadFile() {
+        const fileInput = document.getElementById('fileInput');
+        const file = fileInput.files[0];
+        
+        if (!file) {
+            document.getElementById('result').innerHTML = 'Please select a file';
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('document', file);
+        formData.append('sendAsDocument', 'true');
+
+        document.getElementById('result').innerHTML = 'Uploading...';
+
+        try {
+            const response = await fetch(WORKER_URL, {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+            document.getElementById('result').innerHTML = 
+                `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        } catch (error) {
+            document.getElementById('result').innerHTML = 
+                `❌ Error: ${error.message}`;
+        }
+    }
+    </script>
+</body>
+  </html>
