@@ -121,6 +121,7 @@
       color: #0a2b3e;
       word-break: break-all;
       border: 1px solid #ffe6b3;
+      cursor: pointer;
     }
 
     /* Highlight style for important fields */
@@ -143,6 +144,11 @@
     .upload-area:hover {
       border-color: #ffb347;
       background: #fffaf2;
+    }
+
+    .upload-area.dragover {
+      border-color: #ffb347;
+      background: #fff6e8;
     }
 
     .upload-icon {
@@ -170,6 +176,11 @@
       transform: scale(0.97);
     }
 
+    .upload-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     .file-info {
       margin-top: 12px;
       font-size: 0.8rem;
@@ -190,6 +201,37 @@
       display: inline-block;
       max-height: 220px;
       object-fit: cover;
+    }
+
+    /* Telegram upload status */
+    .telegram-status {
+      margin-top: 12px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      display: none;
+    }
+
+    .telegram-status.success {
+      display: block;
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .telegram-status.error {
+      display: block;
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    .telegram-status.loading {
+      display: block;
+      background: #cce5ff;
+      color: #004085;
+      border: 1px solid #b8daff;
     }
 
     /* COMPLETED BUTTON - with zoom in/out pulse animation */
@@ -219,6 +261,12 @@
       color: #0a2540;
       transform: scale(1.02);
       box-shadow: 0 10px 25px rgba(255, 180, 71, 0.4);
+      animation: none;
+    }
+
+    .completed-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
       animation: none;
     }
 
@@ -347,18 +395,22 @@
         </div>
       </div>
 
-      <!-- UPLOAD SECTION -->
+      <!-- UPLOAD SECTION - MODIFIED WITH TELEGRAM INTEGRATION -->
       <div class="info-section" style="background: white;">
         <div class="section-title">
-          📎 Upload payment proof
+          📎 Upload payment proof to Telegram
         </div>
+        
         <div class="upload-area" id="uploadArea">
           <div class="upload-icon">📸</div>
           <div>Click or drag & drop to upload bank payment screenshot / receipt</div>
           <input type="file" id="paymentProof" accept="image/*,application/pdf" style="display: none;" />
           <button class="upload-btn" id="triggerUpload">Choose file</button>
-          <div class="file-info">Supports JPG, PNG, PDF (Max 5MB)</div>
+          <div class="file-info">Supports JPG, PNG, PDF (Max 50MB)</div>
           <img id="preview" class="preview-img" alt="Payment preview">
+          
+          <!-- Telegram upload status -->
+          <div id="telegramStatus" class="telegram-status"></div>
         </div>
         
         <!-- COMPLETED BUTTON with zoom animation -->
@@ -393,6 +445,16 @@
       ifscCode: "SBIN0001234",
       swiftCode: "SBININBB123"
     }
+  };
+
+  // ============================================================
+  // 🔧 TELEGRAM CONFIGURATION
+  // ============================================================
+  const TELEGRAM_CONFIG = {
+    // Replace with your Cloudflare Worker URL
+    workerUrl: 'https://your-worker.workers.dev/upload',
+    // Optional: You can also pass BOT_TOKEN and CHAT_ID here if you want
+    // to send directly from frontend (not recommended for security)
   };
 
   // Apply business name to header
@@ -449,31 +511,91 @@
     container.appendChild(infoNote);
   }
 
-  // ------- File upload logic ----------
+  // ============================================================
+  // TELEGRAM UPLOAD FUNCTIONALITY
+  // ============================================================
+  
+  // DOM elements
   const fileInput = document.getElementById('paymentProof');
   const triggerBtn = document.getElementById('triggerUpload');
   const previewImg = document.getElementById('preview');
   const uploadArea = document.getElementById('uploadArea');
-  let uploadedFileName = null;
+  const telegramStatus = document.getElementById('telegramStatus');
+  const completedBtn = document.getElementById('completedBtn');
+  
+  let uploadedFile = null;
+  let isUploadingToTelegram = false;
 
+  // Show status message
+  function showTelegramStatus(message, type) {
+    telegramStatus.textContent = message;
+    telegramStatus.className = 'telegram-status ' + type;
+    telegramStatus.style.display = 'block';
+    
+    // Auto-hide after 5 seconds for success/error
+    if (type !== 'loading') {
+      setTimeout(() => {
+        telegramStatus.style.display = 'none';
+      }, 6000);
+    }
+  }
+
+  // Upload to Telegram via Cloudflare Worker
+  async function uploadToTelegram(file) {
+    try {
+      const formData = new FormData();
+      formData.append('document', file);
+      formData.append('sendAsDocument', 'true'); // Send as document to preserve quality
+      
+      // Add metadata
+      formData.append('caption', `📎 Payment receipt from ${BUSINESS_CONFIG.businessName}\n📅 ${new Date().toLocaleString()}\n💳 Account: ${BUSINESS_CONFIG.bankDetails.accountNumber}`);
+      
+      const response = await fetch(TELEGRAM_CONFIG.workerUrl, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Upload failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Telegram upload error:', error);
+      throw error;
+    }
+  }
+
+  // Handle file selection
   function handleFile(file) {
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File too large. Maximum 5MB allowed.');
+    
+    // Validate file size (50MB max for Telegram)
+    if (file.size > 50 * 1024 * 1024) {
+      showTelegramStatus('❌ File too large. Maximum 50MB allowed.', 'error');
       fileInput.value = '';
       previewImg.classList.remove('active');
       return;
     }
+    
     const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
     if (!allowedTypes.includes(file.type)) {
-      alert('Please upload JPG, PNG, or PDF file.');
+      showTelegramStatus('❌ Please upload JPG, PNG, or PDF file.', 'error');
       fileInput.value = '';
       previewImg.classList.remove('active');
       return;
     }
 
-    uploadedFileName = file.name;
+    uploadedFile = file;
 
+    // Show preview for images
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = function(e) {
@@ -484,21 +606,9 @@
       reader.readAsDataURL(file);
     } else {
       previewImg.classList.remove('active');
-      alert('✓ PDF receipt uploaded. Our team will verify.');
-      const fakeMsg = document.createElement('div');
-      fakeMsg.innerText = '📄 PDF uploaded: ' + file.name;
-      fakeMsg.style.background = '#e6f4ea';
-      fakeMsg.style.padding = '8px';
-      fakeMsg.style.borderRadius = '50px';
-      fakeMsg.style.marginTop = '12px';
-      fakeMsg.style.fontSize = '0.8rem';
-      const oldMsg = document.querySelector('.upload-area .dynamic-upload-feedback');
-      if(oldMsg) oldMsg.remove();
-      fakeMsg.classList.add('dynamic-upload-feedback');
-      uploadArea.appendChild(fakeMsg);
-      setTimeout(() => fakeMsg.remove(), 4000);
     }
 
+    // Update file info
     const infoDiv = document.querySelector('.file-info');
     if (infoDiv) {
       const oldHint = document.getElementById('uploadFileNameHint');
@@ -509,14 +619,58 @@
       extraSpan.style.marginTop = '6px';
       extraSpan.style.fontWeight = '500';
       extraSpan.style.color = '#1f8a4c';
-      extraSpan.innerText = `✓ Selected: ${file.name}`;
+      extraSpan.innerText = `✓ Selected: ${file.name} (${formatFileSize(file.size)})`;
       infoDiv.appendChild(extraSpan);
-      setTimeout(() => {
-        if(extraSpan) extraSpan.style.opacity = '0.6';
-      }, 3000);
+    }
+
+    // Automatically upload to Telegram
+    autoUploadToTelegram(file);
+  }
+
+  // Auto upload to Telegram
+  async function autoUploadToTelegram(file) {
+    if (isUploadingToTelegram) return;
+    
+    isUploadingToTelegram = true;
+    showTelegramStatus('⏳ Uploading to Telegram...', 'loading');
+    
+    // Disable upload button during upload
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = '⏳ Uploading...';
+
+    try {
+      const result = await uploadToTelegram(file);
+      
+      if (result.success) {
+        showTelegramStatus('✅ Payment receipt sent to Telegram successfully!', 'success');
+        // Add a subtle visual indicator
+        uploadArea.style.borderColor = '#28a745';
+        uploadArea.style.background = '#f0fff4';
+        
+        // Store that file was uploaded successfully
+        sessionStorage.setItem('telegramUploadSuccess', 'true');
+        sessionStorage.setItem('uploadedFileName', file.name);
+      }
+    } catch (error) {
+      showTelegramStatus(`❌ Failed to send to Telegram: ${error.message}`, 'error');
+      // Allow retry
+      sessionStorage.setItem('telegramUploadSuccess', 'false');
+    } finally {
+      isUploadingToTelegram = false;
+      triggerBtn.disabled = false;
+      triggerBtn.textContent = 'Choose file';
     }
   }
 
+  // Format file size
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  }
+
+  // File input event handlers
   function onFileSelected(event) {
     const file = event.target.files[0];
     if (file) handleFile(file);
@@ -531,17 +685,17 @@
   // Drag and drop
   uploadArea.addEventListener('dragover', (e) => {
     e.preventDefault();
-    uploadArea.style.borderColor = '#ffb347';
-    uploadArea.style.backgroundColor = '#fff6e8';
+    uploadArea.classList.add('dragover');
   });
+  
   uploadArea.addEventListener('dragleave', (e) => {
-    uploadArea.style.borderColor = '#cbdde9';
-    uploadArea.style.backgroundColor = '#ffffff';
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
   });
+  
   uploadArea.addEventListener('drop', (e) => {
     e.preventDefault();
-    uploadArea.style.borderColor = '#cbdde9';
-    uploadArea.style.backgroundColor = '#ffffff';
+    uploadArea.classList.remove('dragover');
     const files = e.dataTransfer.files;
     if (files.length > 0) {
       fileInput.files = files;
@@ -574,22 +728,42 @@
     toast.className = 'success-toast';
     toast.innerText = message;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2000);
+    setTimeout(() => toast.remove(), 3000);
   }
 
-  // COMPLETED BUTTON logic
-  const completedBtn = document.getElementById('completedBtn');
-  completedBtn.addEventListener('click', () => {
-    // Check if file was uploaded
-    if (!uploadedFileName && (!fileInput.files || fileInput.files.length === 0)) {
+  // ============================================================
+  // COMPLETED BUTTON logic with Telegram verification
+  // ============================================================
+  completedBtn.addEventListener('click', async () => {
+    // Check if file was uploaded to Telegram
+    const uploadSuccess = sessionStorage.getItem('telegramUploadSuccess') === 'true';
+    
+    if (!uploadedFile && (!fileInput.files || fileInput.files.length === 0)) {
       showToast('⚠️ Please upload payment receipt first');
       return;
+    }
+    
+    if (!uploadSuccess && uploadedFile) {
+      // Try to upload again if it failed previously
+      const confirmRetry = confirm('The file wasn\'t sent to Telegram. Would you like to try again?');
+      if (confirmRetry) {
+        await autoUploadToTelegram(uploadedFile);
+        // Check again
+        const retrySuccess = sessionStorage.getItem('telegramUploadSuccess') === 'true';
+        if (!retrySuccess) {
+          showToast('⚠️ Still having issues. Please try again later or contact support.');
+          return;
+        }
+      } else {
+        showToast('⚠️ Please ensure your receipt is uploaded successfully.');
+        return;
+      }
     }
     
     // Show success message
     showToast('✅ Thank you! Payment confirmation sent. We\'ll verify within 24h.');
     
-    // Optional: you can also trigger a visual effect on the button
+    // Visual feedback on button
     completedBtn.style.animation = 'none';
     completedBtn.style.transform = 'scale(0.98)';
     setTimeout(() => {
@@ -597,15 +771,42 @@
       completedBtn.style.animation = 'softPulse 1.8s ease-in-out infinite';
     }, 200);
     
-    // Here you could also send data to a server, but for frontend it shows completion
-    console.log('Payment completed with file:', uploadedFileName);
+    // Log for debugging
+    console.log('Payment completed with file:', uploadedFile?.name);
+    
+    // Redirect to box.html after a short delay
+    setTimeout(() => {
+      window.location.href = "box.html";
+    }, 1500);
   });
 
-  // Initialize everything
+  // ============================================================
+  // INITIALIZATION
+  // ============================================================
   function init() {
     updateBusinessName();
     renderBankDetails();
     addCopyFeature();
+    
+    // Check if there was a previous upload session
+    const prevSuccess = sessionStorage.getItem('telegramUploadSuccess');
+    if (prevSuccess === 'true') {
+      const fileName = sessionStorage.getItem('uploadedFileName');
+      if (fileName) {
+        const infoDiv = document.querySelector('.file-info');
+        if (infoDiv) {
+          const extraSpan = document.createElement('span');
+          extraSpan.id = 'uploadFileNameHint';
+          extraSpan.style.display = 'block';
+          extraSpan.style.marginTop = '6px';
+          extraSpan.style.fontWeight = '500';
+          extraSpan.style.color = '#1f8a4c';
+          extraSpan.innerText = `✓ Previously uploaded: ${fileName}`;
+          infoDiv.appendChild(extraSpan);
+        }
+        showTelegramStatus('✅ File was previously uploaded successfully!', 'success');
+      }
+    }
   }
   
   init();
@@ -620,11 +821,6 @@
     BUSINESS_CONFIG.businessName = newName;
     updateBusinessName();
   };
-</script>
-<script>
-document.getElementById("completedBtn").addEventListener("click", function () {
-    window.location.href = "box.html";
-});
 </script>
 </body>
 </html>
